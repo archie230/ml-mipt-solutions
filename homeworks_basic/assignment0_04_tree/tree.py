@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import stats as sps
 from sklearn.base import BaseEstimator
 
 
@@ -19,8 +20,9 @@ def entropy(y):
     EPS = 0.0005
 
     # YOUR CODE HERE
+    p = np.mean(y, axis=0)
     
-    return 0.
+    return -np.sum(p * np.log(p + EPS))
     
 def gini(y):
     """
@@ -38,8 +40,9 @@ def gini(y):
     """
 
     # YOUR CODE HERE
+    p = np.mean(Y, axis=0)
     
-    return 0.
+    return 1 - np.sum(p**2)
     
 def variance(y):
     """
@@ -58,7 +61,7 @@ def variance(y):
     
     # YOUR CODE HERE
     
-    return 0.
+    return np.var(y)
 
 def mad_median(y):
     """
@@ -78,7 +81,7 @@ def mad_median(y):
 
     # YOUR CODE HERE
     
-    return 0.
+    return sps.median_absolute_deviation(y)
 
 
 def one_hot_encode(n_classes, y):
@@ -101,7 +104,6 @@ class Node:
         self.proba = proba
         self.left_child = None
         self.right_child = None
-        
         
 class DecisionTree(BaseEstimator):
     all_criterions = {
@@ -155,6 +157,11 @@ class DecisionTree(BaseEstimator):
         """
 
         # YOUR CODE HERE
+        left_indices = X_subset[:, feature_index] < threshold
+        right_indices = ~left_indices
+        
+        X_left, y_left = X_subset[left_indices, :], y_subset[left_indices, :]
+        X_right, y_right = X_subset[right_indices, :], y_subset[right_indices, :]
         
         return (X_left, y_left), (X_right, y_right)
     
@@ -190,6 +197,9 @@ class DecisionTree(BaseEstimator):
 
         # YOUR CODE HERE
         
+        tuple_ = self.make_split(feature_index, threshold, X_subset, y_subset)
+        y_left, y_right = tuple_[1], tuple_[3]
+        
         return y_left, y_right
 
     def choose_best_split(self, X_subset, y_subset):
@@ -215,6 +225,25 @@ class DecisionTree(BaseEstimator):
 
         """
         # YOUR CODE HERE
+        def information_gain(feature_index, threshold):
+            X_left, y_left, X_right, y_right = self.make_split(feature_index,
+                                                               threshold, X_subset,
+                                                               y_subset)
+            information = self.criterion(y_subset)
+            information_left, information_right = self.criterion(y_left), self.criterion(y_right)
+
+            return information - (y_left.shape[0]/y_subset.shape[0]) * information_left \
+                               - (y_right.shape[0]/y_subset.shape[0]) * information_right
+       
+        values_on_greed = np.zeros((X_subset.shape[0], X_subset.shape[1])) 
+    
+        for i in range(X_subset.shape[1]):
+            for j in range(X_subset.shape[0]):
+                values_on_greed[j, i] = information_gain(i, X_subset[j, i])
+
+        i_max, j_max = np.unravel_index(np.argmax(values_on_greed), values_on_greed.shape)
+        feature_index, threshold = j_max, X_subset[i, j]
+
         return feature_index, threshold
     
     def make_tree(self, X_subset, y_subset):
@@ -235,9 +264,18 @@ class DecisionTree(BaseEstimator):
         root_node : Node class instance
             Node of the root of the fitted tree
         """
+        
+        if self.classification:
+            proba = lambda y : y.mean(axis=0)
+        else:
+            proba = lambda Y : y.mean()
 
         # YOUR CODE HERE
-        
+        if X_subset.shape[0] <= self.min_samples_split or self.depth >= self.max_depth:
+            new_node = Node(None, None, proba=proba(y_subset))
+        else:
+            
+
         return new_node
         
     def fit(self, X, y):
