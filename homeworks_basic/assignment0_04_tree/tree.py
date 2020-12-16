@@ -1,5 +1,4 @@
 import numpy as np
-from scipy import stats as sps
 from sklearn.base import BaseEstimator
 
 
@@ -20,9 +19,10 @@ def entropy(y):
     EPS = 0.0005
 
     # YOUR CODE HERE
-    p = np.mean(y, axis=0)
+    probas = np.mean(y, axis=0)
+    log_probas = np.log(probas + EPS)
     
-    return -np.sum(p * np.log(p + EPS))
+    return -np.sum(probas * log_probas)
     
 def gini(y):
     """
@@ -40,9 +40,8 @@ def gini(y):
     """
 
     # YOUR CODE HERE
-    p = np.mean(Y, axis=0)
-    
-    return 1 - np.sum(p**2)
+    p = np.mean(y, axis=0)
+    return 1 - np.sum(p ** 2)
     
 def variance(y):
     """
@@ -60,7 +59,6 @@ def variance(y):
     """
     
     # YOUR CODE HERE
-    
     return np.var(y)
 
 def mad_median(y):
@@ -80,8 +78,7 @@ def mad_median(y):
     """
 
     # YOUR CODE HERE
-    
-    return sps.median_absolute_deviation(y)
+    return np.sum(abs(y - np.median(y))) / len(y)
 
 
 def one_hot_encode(n_classes, y):
@@ -98,12 +95,14 @@ class Node:
     """
     This class is provided "as is" and it is not mandatory to it use in your code.
     """
-    def __init__(self, feature_index, threshold, proba=0):
+    def __init__(self, feature_index, threshold, depth=0): #proba = 0
         self.feature_index = feature_index
         self.value = threshold
-        self.proba = proba
+        self.proba = None
         self.left_child = None
         self.right_child = None
+        self.depth = depth
+        self.isleaf = False
         
 class DecisionTree(BaseEstimator):
     all_criterions = {
@@ -115,8 +114,6 @@ class DecisionTree(BaseEstimator):
 
     def __init__(self, n_classes=None, max_depth=np.inf, min_samples_split=2, 
                  criterion_name='gini', debug=False):
-
-        assert criterion_name in self.all_criterions.keys(), 'Criterion name must be on of the following: {}'.format(self.all_criterions.keys())
         
         self.n_classes = n_classes
         self.max_depth = max_depth
@@ -124,8 +121,10 @@ class DecisionTree(BaseEstimator):
         self.criterion_name = criterion_name
 
         self.depth = 0
-        self.root = None # Use the Node class to initialize it later
+        self.root = None 
         self.debug = debug
+        self.ans = 0
+        self.prob_ans = None
 
         
         
@@ -156,12 +155,14 @@ class DecisionTree(BaseEstimator):
             Part of the providev subset where selected feature x^j >= threshold
         """
 
-        # YOUR CODE HERE
-        left_indices = X_subset[:, feature_index] < threshold
-        right_indices = ~left_indices
+        mask = X_subset[:, feature_index] < threshold
+        opposite_mask = X_subset[:, feature_index] >= threshold
+
+        y_left = y_subset[mask]
+        y_right = y_subset[opposite_mask]
         
-        X_left, y_left = X_subset[left_indices, :], y_subset[left_indices, :]
-        X_right, y_right = X_subset[right_indices, :], y_subset[right_indices, :]
+        X_left = X_subset[mask]
+        X_right = X_subset[opposite_mask]
         
         return (X_left, y_left), (X_right, y_right)
     
@@ -195,11 +196,10 @@ class DecisionTree(BaseEstimator):
             Part of the provided subset where selected feature x^j >= threshold
         """
 
-        # YOUR CODE HERE
-        
-        tuple_ = self.make_split(feature_index, threshold, X_subset, y_subset)
-        y_left, y_right = tuple_[1], tuple_[3]
-        
+        mask = X_subset[:, feature_index] < threshold
+        opposite_mask = X_subset[:, feature_index] >= threshold
+        y_left = y_subset[mask]
+        y_right = y_subset[opposite_mask]
         return y_left, y_right
 
     def choose_best_split(self, X_subset, y_subset):
@@ -224,29 +224,29 @@ class DecisionTree(BaseEstimator):
             Threshold value to perform split
 
         """
-        # YOUR CODE HERE
-        def information_gain(feature_index, threshold):
-            X_left, y_left, X_right, y_right = self.make_split(feature_index,
-                                                               threshold, X_subset,
-                                                               y_subset)
-            information = self.criterion(y_subset)
-            information_left, information_right = self.criterion(y_left), self.criterion(y_right)
+        best_criterion_value = np.inf
+        best_feature, best_threshold = 0, 0
 
-            return information - (y_left.shape[0]/y_subset.shape[0]) * information_left \
-                               - (y_right.shape[0]/y_subset.shape[0]) * information_right
-       
-        values_on_greed = np.zeros((X_subset.shape[0], X_subset.shape[1])) 
+        for feature_id in range(X_subset.shape[1]):
+            features = self.feature_values[feature_id]
+
+            for threshold in features:
+                y_left, y_right = self.make_split_only_y(feature_id, threshold, X_subset, y_subset)
+
+                if y_left.shape[0] == 0 or y_right.shape[0] == 0:
+                    continue
+
+                criterion_value = self.criterion(y_left) * y_left.shape[0] + \
+                                  self.criterion(y_right) * y_right.shape[0]
+
+                if criterion_value < best_criterion_value:
+                    best_feature = feature_id
+                    best_threshold = threshold
+                    best_criterion_value = criterion_value
+
+        return best_feature, best_threshold
     
-        for i in range(X_subset.shape[1]):
-            for j in range(X_subset.shape[0]):
-                values_on_greed[j, i] = information_gain(i, X_subset[j, i])
-
-        i_max, j_max = np.unravel_index(np.argmax(values_on_greed), values_on_greed.shape)
-        feature_index, threshold = j_max, X_subset[i, j]
-
-        return feature_index, threshold
-    
-    def make_tree(self, X_subset, y_subset):
+    def make_tree(self, X_subset, y_subset, depth=0):
         """
         Recursively builds the tree
         
@@ -264,18 +264,34 @@ class DecisionTree(BaseEstimator):
         root_node : Node class instance
             Node of the root of the fitted tree
         """
+
+        if depth > self.depth:
+            self.depth = depth
         
-        if self.classification:
-            proba = lambda y : y.mean(axis=0)
-        else:
-            proba = lambda Y : y.mean()
-
-        # YOUR CODE HERE
-        if X_subset.shape[0] <= self.min_samples_split or self.depth >= self.max_depth:
-            new_node = Node(None, None, proba=proba(y_subset))
-        else:
+        if X_subset.shape[0] <= self.min_samples_split or depth == self.max_depth or len(set(y_subset.flatten())) == 1:
+            new_node = Node(0, 0, depth=depth)
+            new_node.isleaf = True
+            if not self.all_criterions[self.criterion_name][1]:
+                new_node.value = np.mean(y_subset)
+            new_node.proba = np.mean(y_subset, axis=0)
+            return new_node
+        
             
-
+        opt_index, opt_threshold = self.choose_best_split(X_subset, y_subset)
+        (X_left, y_left), (X_right, y_right) = self.make_split(opt_index, opt_threshold, X_subset, y_subset)
+        
+        new_node = Node(opt_index, opt_threshold, depth)
+        if X_left.shape[0] == 0 or X_right.shape[0] == 0: 
+            new_node.isleaf = True
+           
+            if not self.all_criterions[self.criterion_name][1]:
+                new_node.value = np.mean(y_subset)
+            
+                
+        new_node.left_child = self.make_tree(X_left, y_left, depth+1)
+        new_node.right_child = self.make_tree(X_right, y_right, depth+1)    
+                
+        new_node.proba = np.mean(y_subset, axis=0)
         return new_node
         
     def fit(self, X, y):
@@ -294,12 +310,34 @@ class DecisionTree(BaseEstimator):
         """
         assert len(y.shape) == 2 and len(y) == len(X), 'Wrong y shape'
         self.criterion, self.classification = self.all_criterions[self.criterion_name]
+        
+        self.feature_values = []
+        for feature_id in range(X.shape[1]):
+            thresholds = np.sort(np.unique(X[:, feature_id]))
+            if len(thresholds) < 50:
+                self.feature_values.append(thresholds)
+            else:
+                thresholds = [thresholds[int(i * len(thresholds) / 50.)] for i in range(50)]
+                self.feature_values.append(thresholds)
+        
         if self.classification:
             if self.n_classes is None:
                 self.n_classes = len(np.unique(y))
             y = one_hot_encode(self.n_classes, y)
 
-        self.root = self.make_tree(X, y)
+        self.root = self.make_tree(X, y, 1)
+    
+    def walk(self, x, node):
+        if node.isleaf:
+            if not self.all_criterions[self.criterion_name][1]:
+                self.ans = node.value
+            else: 
+                self.ans = np.argmax(node.proba)
+        else:
+            if x[node.feature_index] < node.value:
+                self.walk(x, node.left_child)
+            else:
+                self.walk(x, node.right_child)
     
     def predict(self, X):
         """
@@ -318,9 +356,24 @@ class DecisionTree(BaseEstimator):
         
         """
 
-        # YOUR CODE HERE
+        y_predicted = []
         
+        for i in range(X.shape[0]):
+            self.walk(X[i], self.root)
+            y_predicted.append(self.ans)
+            
+        y_predicted = np.array(y_predicted)
         return y_predicted
+    
+    def walk_proba(self, x, node):
+        if node.isleaf:
+            self.prob_ans = node.proba
+            
+        else:
+            if x[node.feature_index] < node.value:
+                self.walk_proba(x, node.left_child)
+            else:
+                self.walk_proba(x, node.right_child)
         
     def predict_proba(self, X):
         """
@@ -340,6 +393,11 @@ class DecisionTree(BaseEstimator):
         """
         assert self.classification, 'Available only for classification problem'
 
-        # YOUR CODE HERE
+        y_predicted_probs = []
         
+        for i in range(X.shape[0]):
+            self.walk_proba(X[i], self.root)
+            y_predicted_probs.append(self.prob_ans)              
+            
+        y_predicted_probs = np.array(y_predicted_probs)
         return y_predicted_probs
